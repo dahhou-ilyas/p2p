@@ -19,29 +19,27 @@ public class Peer {
     private Set<PeerInfo> connectedPeers;
     private static final int DISCOVERY_PORT = 8888;
     private int discoveryUDPport ;
-    private String GROUP = "127.0.0.1";
+    private String GROUP = "224.0.0.1";
     private int PORT_GROUP = 5555;
 
 
-    public Peer(String name,int port){
+    public Peer(String name,int port,int udpPort){
         this.name = name;
         this.port = port;
         this.connectedPeers = ConcurrentHashMap.newKeySet();
+        this.discoveryUDPport=udpPort;
         try {
             serverSocket = new ServerSocket(port);
 
 
-            discoverySocket = new DatagramSocket();
-            discoveryUDPport = discoverySocket.getLocalPort();
+            discoverySocket = new DatagramSocket(discoveryUDPport);
+
 
             InetAddress group = InetAddress.getByName(GROUP);
             multicast = new MulticastSocket(PORT_GROUP);
 
-            NetworkInterface networkInterface = NetworkInterface.getByName("en0");
-
-            multicast.setNetworkInterface(networkInterface);
             multicast.setTimeToLive(1);
-            multicast.joinGroup(new InetSocketAddress(group, PORT_GROUP), networkInterface);
+            multicast.joinGroup(group);
 
         } catch (IOException e) {
             System.err.println("Erreur lors de la création des sockets: " + e.getMessage());
@@ -133,6 +131,8 @@ public class Peer {
             InetAddress target = InetAddress.getByName(targetIp);
             DatagramPacket packet = new DatagramPacket(
                     buffer, buffer.length, target, peerUDPPort);
+
+            System.out.println("envoyé wa 3alikom salam");
             discoverySocket.send(packet);
         } catch (IOException e) {
             System.err.println("Erreur lors de l'envoi unicast: " + e.getMessage());
