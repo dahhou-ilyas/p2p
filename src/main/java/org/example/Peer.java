@@ -103,8 +103,9 @@ public class Peer {
         }
     }
     public void multicastReceiver(){
-        byte[] buffer = new byte[1024];
 
+        System.out.println("hhhhhheeeeeeeelllllo");
+        byte[] buffer = new byte[1024];
 
         while (true){
             try{
@@ -112,6 +113,10 @@ public class Peer {
                 multicast.receive(packet);
 
                 String message =new String(packet.getData(),0,packet.getLength());
+
+                System.out.println("________________________");
+                System.out.println(message);
+                System.out.println("________________________");
 
                 handleMulticastRecevierMessage(message, packet.getAddress().getHostAddress());
             }catch (IOException e) {
@@ -137,9 +142,7 @@ public class Peer {
     public void handleMulticastRecevierMessage(String message, String sourceIp){
         String[] parts = message.split("\\|");
 
-        System.out.println("________________________");
-        System.out.println(message);
-        System.out.println("________________________");
+
         if (parts.length >= 4){
             String type = parts[0];
             String peerName = parts[1];
