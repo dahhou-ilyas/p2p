@@ -36,9 +36,12 @@ public class Peer {
 
             InetAddress group = InetAddress.getByName(GROUP);
             multicast = new MulticastSocket(PORT_GROUP);
-            multicast.setTimeToLive(1);
 
-            multicast.joinGroup(group);
+            NetworkInterface networkInterface = NetworkInterface.getByName("en0");
+
+            multicast.setNetworkInterface(networkInterface);
+            multicast.setTimeToLive(1);
+            multicast.joinGroup(new InetSocketAddress(group, PORT_GROUP), networkInterface);
 
         } catch (IOException e) {
             System.err.println("Erreur lors de la création des sockets: " + e.getMessage());
@@ -134,6 +137,9 @@ public class Peer {
     public void handleMulticastRecevierMessage(String message, String sourceIp){
         String[] parts = message.split("\\|");
 
+        System.out.println("________________________");
+        System.out.println(message);
+        System.out.println("________________________");
         if (parts.length >= 4){
             String type = parts[0];
             String peerName = parts[1];
@@ -185,8 +191,8 @@ public class Peer {
             InetAddress group = InetAddress.getByName(GROUP);
             byte[] buffer = message.getBytes();
             DatagramPacket packet = new DatagramPacket(buffer, buffer.length, group, PORT_GROUP);
-            System.out.println(discoverySocket.getBroadcast());
-            discoverySocket.send(packet);
+
+            multicast.send(packet);
         } catch (IOException e) {
             System.err.println("Erreur lors du broadcast: " + e.getMessage());
             e.printStackTrace();
