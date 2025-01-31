@@ -6,16 +6,18 @@ public class PeerInfo {
     String ip;
     int port;
     String name;
+    int peerPortUDP;
 
-    public PeerInfo(String ip, int port, String name) {
+    public PeerInfo(String ip, int port, String name,int peerPortUDP) {
         this.ip = ip;
         this.port = port;
         this.name = name;
+        this.peerPortUDP=peerPortUDP;
     }
 
     @Override
     public String toString() {
-        return name + " (" + ip + ":" + port + ")";
+        return name + " (" + ip + ":" + port + ") "+"peerPortUDP : "+peerPortUDP ;
     }
 
     @Override
@@ -23,7 +25,7 @@ public class PeerInfo {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         PeerInfo peerInfo = (PeerInfo) o;
-        return port == peerInfo.port && ip.equals(peerInfo.ip);
+        return port == peerInfo.port && Objects.equals(name, peerInfo.name);
     }
 
     @Override
