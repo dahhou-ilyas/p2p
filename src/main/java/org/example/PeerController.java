@@ -1,5 +1,6 @@
 package org.example;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -7,11 +8,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/peers")
 public class PeerController {
-    private final Peer peer;
+    @Autowired
+    private Peer peer;
 
-    public PeerController(Peer peer) {
-        this.peer = peer;
-    }
 
     @GetMapping("/count")
     public PeerCountResponse getConnectedPeersCount() {

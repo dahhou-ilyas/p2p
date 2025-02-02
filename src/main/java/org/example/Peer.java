@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -313,5 +315,13 @@ public class Peer {
         } catch (IOException e) {
             System.err.println("Erreur lors de la connexion au pair: " + e.getMessage());
         }
+    }
+
+    public int getConnectedPeersCount() {
+        return connectedPeers.size();
+    }
+
+    public List<PeerInfo> getConnectedPeersList() {
+        return new ArrayList<>(connectedPeers);
     }
 }
