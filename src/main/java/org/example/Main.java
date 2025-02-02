@@ -7,7 +7,6 @@ public class Main {
             System.out.println("Nom du peer manquant dans l'environnement.");
             return;
         }
-
         String peerPortStr = System.getenv("PEER_PORT");  // Récupérer le port TCP
         if (peerPortStr == null || peerPortStr.isEmpty()) {
             System.out.println("Port du peer manquant dans l'environnement.");

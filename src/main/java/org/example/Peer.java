@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.*;
-import java.util.HashSet;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -100,9 +99,7 @@ public class Peer {
             }
         }
     }
-    public void multicastReceiver(){
-
-        System.out.println("hhhhhheeeeeeeelllllo");
+    private void multicastReceiver(){
         byte[] buffer = new byte[1024];
 
         while (true){
@@ -111,10 +108,6 @@ public class Peer {
                 multicast.receive(packet);
 
                 String message =new String(packet.getData(),0,packet.getLength());
-
-                System.out.println("________________________");
-                System.out.println(message);
-                System.out.println("________________________");
 
                 handleMulticastRecevierMessage(message, packet.getAddress().getHostAddress());
             }catch (IOException e) {
@@ -139,7 +132,7 @@ public class Peer {
         }
     }
 
-    public void handleMulticastRecevierMessage(String message, String sourceIp){
+    private void handleMulticastRecevierMessage(String message, String sourceIp){
         String[] parts = message.split("\\|");
 
 
@@ -202,19 +195,6 @@ public class Peer {
         }
     }
 
-
-//    private void sendUnicastPresence(String targetIp) {
-//        String message = "HELLO|" + name + "|" + port;
-//        try {
-//            byte[] buffer = message.getBytes();
-//            InetAddress target = InetAddress.getByName(targetIp);
-//            DatagramPacket packet = new DatagramPacket(
-//                    buffer, buffer.length, target, DISCOVERY_PORT);
-//            discoverySocket.send(packet);
-//        } catch (IOException e) {
-//            System.err.println("Erreur lors de l'envoi unicast: " + e.getMessage());
-//        }
-//    }
 
     private void broadcastDisconnection() {
         String message = "BYE|" + name + "|" + port;
