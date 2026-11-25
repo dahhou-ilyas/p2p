@@ -1,10 +1,13 @@
-# Utiliser une image de base Java
-FROM openjdk:17-jdk-slim
+# Build the jar inside Docker, so `docker compose up --build` works on a clean checkout
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /src
+COPY pom.xml .
+RUN mvn -q -B dependency:go-offline
+COPY src ./src
+RUN mvn -q -B package -DskipTests
 
-# Créer un répertoire pour l'application
+# Run on the same Java version the code is compiled for (17)
+FROM eclipse-temurin:17-jre
 WORKDIR /app
-
-# Copier le JAR de ton projet dans le conteneur
-COPY target/p2p-1.0-SNAPSHOT.jar /app/p2p-1.0-SNAPSHOT.jar
-
-CMD ["java", "-jar", "p2p-1.0-SNAPSHOT.jar"]
+COPY --from=build /src/target/p2p-1.0-SNAPSHOT.jar /app/p2p.jar
+CMD ["java", "-jar", "p2p.jar"]
