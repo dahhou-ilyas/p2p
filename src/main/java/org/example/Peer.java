@@ -7,56 +7,64 @@ import java.io.PrintWriter;
 import java.net.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Peer {
-    private ServerSocket serverSocket;
-    private DatagramSocket discoverySocket;
-    private MulticastSocket multicast;
-    private int port;
-    private String name;
-    private Set<PeerInfo> connectedPeers;
-    private static final int DISCOVERY_PORT = 8888;
-    private int discoveryUDPport ;
-    private String GROUP = "224.0.0.1";
-    private int PORT_GROUP = 5555;
+    private static final String GROUP = "224.0.0.1";
+    private static final int PORT_GROUP = 5555;
+    // Every peer re-announces itself periodically; a peer that stays silent
+    // for PEER_TIMEOUT_MS (three missed announcements) is considered gone.
+    private static final long HEARTBEAT_MS = 5_000;
+    private static final long PEER_TIMEOUT_MS = 15_000;
+
+    private final ServerSocket serverSocket;
+    private final DatagramSocket discoverySocket;
+    private final MulticastSocket multicast;
+    private final InetAddress group;
+    private final int port;
+    private final String name;
+    private final int discoveryUDPport;
+    // The local registry: every known peer and the last time we heard from it.
+    private final Map<PeerInfo, Long> connectedPeers = new ConcurrentHashMap<>();
+    private volatile boolean running = true;
 
 
-    public Peer(String name,int port,int udpPort){
+    public Peer(String name, int port, int udpPort) throws IOException {
         this.name = name;
         this.port = port;
-        this.connectedPeers = ConcurrentHashMap.newKeySet();
-        this.discoveryUDPport=udpPort;
-        try {
-            serverSocket = new ServerSocket(port);
+        this.discoveryUDPport = udpPort;
 
+        serverSocket = new ServerSocket(port);
+        discoverySocket = new DatagramSocket(discoveryUDPport);
 
-            discoverySocket = new DatagramSocket(discoveryUDPport);
-
-
-            InetAddress group = InetAddress.getByName(GROUP);
-            multicast = new MulticastSocket(PORT_GROUP);
-
-            multicast.setTimeToLive(1);
-            multicast.joinGroup(group);
-
-        } catch (IOException e) {
-            System.err.println("Erreur lors de la création des sockets: " + e.getMessage());
-        }
+        group = InetAddress.getByName(GROUP);
+        multicast = new MulticastSocket(PORT_GROUP);
+        multicast.setTimeToLive(1);
+        multicast.joinGroup(group);
     }
 
 
-    public void startPeer(){
-        new Thread(this::listenForConnections).start();
-        new Thread(this::startDiscoveryService).start();
-        new Thread(this::multicastReceiver).start();
+    public void start() {
+        startBackground(this::listenForConnections);
+        startBackground(this::startDiscoveryService);
+        startBackground(this::multicastReceiver);
+        startBackground(this::heartbeat);
 
         broadcastPresence();
-
-        Scanner scanner = new Scanner(System.in);
         System.out.println("Peer " + name + " démarré sur le port " + port + "   my UDP Port "+ discoveryUDPport);
+    }
+
+    /**
+     * The interactive menu. It is the only code that reads System.in: two
+     * Scanners on the same stream steal each other's input.
+     *
+     * @return true if the user chose to quit, false if there is no console
+     *         (stdin closed, e.g. a container started without -i)
+     */
+    public boolean runConsole() {
+        Scanner scanner = new Scanner(System.in);
 
         while (true){
             System.out.println("\nOptions:");
@@ -64,62 +72,78 @@ public class Peer {
             System.out.println("2. Envoyer un message à un pair");
             System.out.println("3. Quitter");
 
-            int choice = scanner.nextInt();
-            scanner.nextLine();
-
-            switch (choice){
-                case 1:
+            if (!scanner.hasNextLine()) {
+                return false;
+            }
+            switch (scanner.nextLine().trim()){
+                case "1":
                     showConnectedPeers();
                     break;
-                case 2:
+                case "2":
                     if (connectedPeers.isEmpty()) {
                         System.out.println("Aucun pair connecté.");
                         break;
                     }
                     selectAndConnectToPeer(scanner);
                     break;
-                case 3:
-                    broadcastDisconnection();
-                    return;
+                case "3":
+                    stop();
+                    return true;
+                default:
+                    System.out.println("Choix invalide.");
             }
         }
     }
 
+    // Daemon threads: they must not keep the JVM alive once the peer has quit.
+    private void startBackground(Runnable task) {
+        Thread t = new Thread(task);
+        t.setDaemon(true);
+        t.start();
+    }
+
+    public void stop() {
+        if (!running) return;
+        broadcastDisconnection();
+        running = false;
+        multicast.close();
+        discoverySocket.close();
+        try {
+            serverSocket.close();
+        } catch (IOException ignored) {
+        }
+    }
+
+    // Unicast replies (HELLO sent straight to our UDP port by a peer that just heard us).
     private void startDiscoveryService(){
-        byte[] buffer = new byte[1024];
-
-        while (true){
-            try{
-                DatagramPacket packet = new DatagramPacket(buffer,buffer.length);
-                discoverySocket.receive(packet);
-
-                String message =new String(packet.getData(),0,packet.getLength());
-
-                handleDiscoveryMessage(message, packet.getAddress().getHostAddress());
-            }catch (IOException e) {
-                System.err.println("Erreur dans le service de découverte: " + e.getMessage());
-            }
-        }
+        receiveLoop(discoverySocket, false);
     }
+
+    // Multicast announcements (HELLO / BYE sent to the whole group).
     private void multicastReceiver(){
-        byte[] buffer = new byte[1024];
-
-        while (true){
-            try{
-                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                multicast.receive(packet);
-
-                String message =new String(packet.getData(),0,packet.getLength());
-
-                handleMulticastRecevierMessage(message, packet.getAddress().getHostAddress());
-            }catch (IOException e) {
-                System.err.println("Erreur dans le service de découverte: " + e.getMessage());
-            }
-        }
-
+        receiveLoop(multicast, true);
     }
 
-    private void sendUnicastPresenceUDP(String targetIp,int peerUDPPort, int discoveryUDPport) {
+    private void receiveLoop(DatagramSocket socket, boolean replyToNewPeers) {
+        byte[] buffer = new byte[1024];
+        while (running) {
+            try {
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                socket.receive(packet);
+                String message = new String(packet.getData(), 0, packet.getLength());
+                handleMessage(message, packet.getAddress().getHostAddress(), replyToNewPeers);
+            } catch (IOException e) {
+                if (running) {
+                    System.err.println("Erreur dans le service de découverte: " + e.getMessage());
+                }
+            } catch (RuntimeException e) {
+                // One malformed packet must never stop discovery for good.
+                System.err.println("Paquet ignoré: " + e.getMessage());
+            }
+        }
+    }
+
+    private void sendUnicastPresenceUDP(String targetIp, int peerUDPPort) {
         String message = "HELLO|" + name + "|" + port + "|" + discoveryUDPport;
         try {
             byte[] buffer = message.getBytes();
@@ -134,80 +158,72 @@ public class Peer {
         }
     }
 
-    private void handleMulticastRecevierMessage(String message, String sourceIp){
+    // HELLO|name|tcpPort|udpPort  or  BYE|name|tcpPort
+    private void handleMessage(String message, String sourceIp, boolean replyToNewPeers) {
         String[] parts = message.split("\\|");
 
+        if (parts[0].equals("HELLO") && parts.length >= 4) {
+            PeerInfo peer = new PeerInfo(sourceIp, Integer.parseInt(parts[2]), parts[1], Integer.parseInt(parts[3]));
+            if (isSelf(peer)) return;
 
-        if (parts.length >= 4){
-            String type = parts[0];
-            String peerName = parts[1];
-            int peerPort = Integer.parseInt(parts[2]);
-            int peerPortUDP = Integer.parseInt(parts[3]);
-
-            if (type.equals("HELLO")){
-                PeerInfo newPeer = new PeerInfo(sourceIp, peerPort, peerName,peerPortUDP);
-                if (!newPeer.equals(new PeerInfo(getLocalIp(), port, name,discoveryUDPport))){
-                    connectedPeers.add(newPeer);
-                    System.out.println("\nNouveau pair découvert: " + newPeer);
-                    sendUnicastPresenceUDP(sourceIp,peerPortUDP,discoveryUDPport);
-                }else if (type.equals("BYE")) {
-                    connectedPeers.removeIf(peer ->
-                            peer.ip.equals(sourceIp) && peer.port == peerPort);
-                    System.out.println("\nPair déconnecté: " + peerName);
+            boolean isNew = connectedPeers.put(peer, System.currentTimeMillis()) == null;
+            if (isNew) {
+                System.out.println("\nNouveau pair découvert: " + peer);
+                // Answer a newcomer directly, so it learns about us without
+                // waiting for our next periodic announcement.
+                if (replyToNewPeers) {
+                    sendUnicastPresenceUDP(sourceIp, peer.peerPortUDP);
                 }
             }
-
+        } else if (parts[0].equals("BYE") && parts.length >= 3) {
+            PeerInfo peer = new PeerInfo(sourceIp, Integer.parseInt(parts[2]), parts[1], 0);
+            if (connectedPeers.remove(peer) != null) {
+                System.out.println("\nPair déconnecté: " + peer.name);
+            }
         }
     }
 
-    private void handleDiscoveryMessage(String message, String sourceIp){
-        String[] parts = message.split("\\|");
+    private boolean isSelf(PeerInfo peer) {
+        return peer.name.equals(name) && peer.port == port;
+    }
 
-        if (parts.length >= 4){
-            String type = parts[0];
-            String peerName = parts[1];
-            int peerPort = Integer.parseInt(parts[2]);
-            int reWolcomePortUDP = Integer.parseInt(parts[3]);
-            if (type.equals("HELLO")){
-                PeerInfo newPeer = new PeerInfo(sourceIp, peerPort, peerName,reWolcomePortUDP);
-                if (!newPeer.equals(new PeerInfo(getLocalIp(), port, name,reWolcomePortUDP))){
-                    connectedPeers.add(newPeer);
-                    System.out.println("\nNouveau pair découvert xxxxx: " + newPeer);
-                }else if (type.equals("BYE")) {
-                    connectedPeers.removeIf(peer ->
-                            peer.ip.equals(sourceIp) && peer.port == peerPort);
-                    System.out.println("\nPair déconnecté: " + peerName);
-                }
+    private void heartbeat() {
+        while (running) {
+            try {
+                Thread.sleep(HEARTBEAT_MS);
+            } catch (InterruptedException e) {
+                return;
             }
+            broadcastPresence();
+            // Peers that crashed never send BYE: forget them once they go silent.
+            long now = System.currentTimeMillis();
+            connectedPeers.entrySet().removeIf(entry -> {
+                boolean expired = now - entry.getValue() > PEER_TIMEOUT_MS;
+                if (expired) {
+                    System.out.println("\nPair expiré (plus de nouvelles): " + entry.getKey().name);
+                }
+                return expired;
+            });
         }
     }
 
     private void broadcastPresence() {
-        String message = "HELLO|" + name + "|" + port + "|" + discoveryUDPport;
-        System.out.println(message);
-        try {
-            InetAddress group = InetAddress.getByName(GROUP);
-            byte[] buffer = message.getBytes();
-            DatagramPacket packet = new DatagramPacket(buffer, buffer.length, group, PORT_GROUP);
-
-            multicast.send(packet);
-        } catch (IOException e) {
-            System.err.println("Erreur lors du broadcast: " + e.getMessage());
-            e.printStackTrace();
-        }
+        sendToGroup("HELLO|" + name + "|" + port + "|" + discoveryUDPport);
     }
 
-
+    // BYE goes to the multicast group, where every peer is listening.
     private void broadcastDisconnection() {
-        String message = "BYE|" + name + "|" + port;
+        sendToGroup("BYE|" + name + "|" + port);
+    }
+
+    private void sendToGroup(String message) {
         try {
             byte[] buffer = message.getBytes();
-            InetAddress broadcast = InetAddress.getByName("255.255.255.255");
-            DatagramPacket packet = new DatagramPacket(
-                    buffer, buffer.length, broadcast, DISCOVERY_PORT);
-            discoverySocket.send(packet);
+            multicast.send(new DatagramPacket(buffer, buffer.length, group, PORT_GROUP));
         } catch (IOException e) {
-            System.err.println("Erreur lors du broadcast de déconnexion: " + e.getMessage());
+            if (running) {
+                System.err.println("Erreur lors de l'envoi au groupe: " + e.getMessage());
+            }
         }
     }
 
@@ -218,7 +234,7 @@ public class Peer {
         }
         System.out.println("\nPairs connectés:");
         int i = 1;
-        for (PeerInfo peer : connectedPeers) {
+        for (PeerInfo peer : connectedPeers.keySet()) {
             System.out.println(i++ + ". " + peer);
         }
     }
@@ -226,23 +242,20 @@ public class Peer {
     private void selectAndConnectToPeer(Scanner scanner) {
         showConnectedPeers();
         System.out.print("Sélectionnez le numéro du pair: ");
-        int selection = scanner.nextInt();
-        scanner.nextLine();
+        int selection;
+        try {
+            selection = Integer.parseInt(scanner.nextLine().trim());
+        } catch (NumberFormatException | java.util.NoSuchElementException e) {
+            System.out.println("Sélection invalide.");
+            return;
+        }
 
-        PeerInfo[] peers = connectedPeers.toArray(new PeerInfo[0]);
+        PeerInfo[] peers = connectedPeers.keySet().toArray(new PeerInfo[0]);
         if (selection > 0 && selection <= peers.length) {
             PeerInfo selectedPeer = peers[selection - 1];
-            connectToPeer(selectedPeer.ip, selectedPeer.port);
+            connectToPeer(selectedPeer.ip, selectedPeer.port, scanner);
         } else {
             System.out.println("Sélection invalide.");
-        }
-    }
-
-    private String getLocalIp() {
-        try {
-            return InetAddress.getLocalHost().getHostAddress();
-        } catch (UnknownHostException e) {
-            return "127.0.0.1";
         }
     }
 
@@ -250,7 +263,7 @@ public class Peer {
         while (!serverSocket.isClosed()) {
             try {
                 Socket clientSocket = serverSocket.accept();
-                new Thread(() -> handleConnection(clientSocket)).start();
+                startBackground(() -> handleConnection(clientSocket));
             } catch (IOException e) {
                 if (!serverSocket.isClosed()) {
                     System.err.println("Erreur lors de l'acceptation de la connexion: " + e.getMessage());
@@ -259,59 +272,47 @@ public class Peer {
         }
     }
 
+    // Incoming chat: print what the other peer writes. This thread never
+    // touches the console; to answer, the user opens a connection back with
+    // option 2 of the menu.
     private void handleConnection(Socket socket) {
-        try {
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+        String from = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+        try (socket;
+             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
 
             out.println("Connecté au pair: " + name);
 
-            Scanner scanner = new Scanner(System.in);
             String inputLine;
-
             while ((inputLine = in.readLine()) != null) {
-                System.out.println("Message reçu: " + inputLine);
-                System.out.print("Répondre (ou 'quit' pour quitter): ");
-                String response = scanner.nextLine();
-
-                if ("quit".equalsIgnoreCase(response)) {
-                    break;
-                }
-                out.println(response);
+                System.out.println("\nMessage reçu de " + from + ": " + inputLine);
             }
-
-            socket.close();
+            System.out.println("\nConversation terminée avec " + from);
         } catch (IOException e) {
             System.err.println("Erreur lors de la gestion de la connexion: " + e.getMessage());
         }
     }
 
-    private void connectToPeer(String ip, int peerPort) {
-        try {
-            Socket socket = new Socket(ip, peerPort);
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+    // Outgoing chat, driven by the menu thread with the menu's Scanner.
+    private void connectToPeer(String ip, int peerPort, Scanner scanner) {
+        try (Socket socket = new Socket(ip, peerPort);
+             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
 
             String welcome = in.readLine();
             System.out.println(welcome);
 
-            Scanner scanner = new Scanner(System.in);
-            String userInput;
-
             while (true) {
                 System.out.print("Entrez votre message (ou 'quit' pour quitter): ");
-                userInput = scanner.nextLine();
-
+                if (!scanner.hasNextLine()) {
+                    break;
+                }
+                String userInput = scanner.nextLine();
                 if ("quit".equalsIgnoreCase(userInput)) {
                     break;
                 }
-
                 out.println(userInput);
-                String response = in.readLine();
-                System.out.println("Réponse reçue: " + response);
             }
-
-            socket.close();
         } catch (IOException e) {
             System.err.println("Erreur lors de la connexion au pair: " + e.getMessage());
         }
@@ -322,6 +323,6 @@ public class Peer {
     }
 
     public List<PeerInfo> getConnectedPeersList() {
-        return new ArrayList<>(connectedPeers);
+        return new ArrayList<>(connectedPeers.keySet());
     }
 }

@@ -1,27 +1,41 @@
 package org.example;
 
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+
+import java.io.IOException;
+
+@SpringBootApplication
 public class Main {
+
     public static void main(String[] args) {
-        String name = System.getenv("PEER_NAME");   // Récupérer le nom du peer
-        if (name == null || name.isEmpty()) {
-            System.out.println("Nom du peer manquant dans l'environnement.");
-            return;
-        }
-        String peerPortStr = System.getenv("PEER_PORT");  // Récupérer le port TCP
-        if (peerPortStr == null || peerPortStr.isEmpty()) {
-            System.out.println("Port du peer manquant dans l'environnement.");
-            return;
-        }
-        int tcpPort = Integer.parseInt(peerPortStr);  // Convertir le port en entier
+        ConfigurableApplicationContext context = SpringApplication.run(Main.class, args);
+        Peer peer = context.getBean(Peer.class);
 
-        String udpPortStr = System.getenv("UDP_PORT");  // Récupérer le port UDP
-        if (udpPortStr == null || udpPortStr.isEmpty()) {
-            System.out.println("Port UDP manquant dans l'environnement.");
-            return;
+        // The menu runs on the main thread; the REST API (/api/peers) keeps
+        // working in the background. Without a console, the peer and its API
+        // simply keep running.
+        if (peer.runConsole()) {
+            System.exit(SpringApplication.exit(context));
         }
-        int udpPort = Integer.parseInt(udpPortStr);
+    }
 
-        Peer peer = new Peer(name, tcpPort,udpPort);
-        peer.startPeer();
+    // The Peer is a Spring bean so PeerController can read its registry.
+    @Bean(destroyMethod = "stop")
+    public Peer peer() throws IOException {
+        Peer peer = new Peer(requireEnv("PEER_NAME"), Integer.parseInt(requireEnv("PEER_PORT")),
+                Integer.parseInt(requireEnv("UDP_PORT")));
+        peer.start();
+        return peer;
+    }
+
+    private static String requireEnv(String key) {
+        String value = System.getenv(key);
+        if (value == null || value.isEmpty()) {
+            throw new IllegalStateException("Variable d'environnement manquante: " + key);
+        }
+        return value;
     }
 }
