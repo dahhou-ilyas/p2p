@@ -21,7 +21,13 @@ public class Main {
         }
         int udpPort = Integer.parseInt(udpPortStr);
 
-        Peer peer = new Peer(name, tcpPort,udpPort);
-        peer.startPeer();
+        try {
+            Peer peer = new Peer(name, tcpPort, udpPort);
+            peer.startPeer();
+        } catch (java.io.IOException e) {
+            // Fail fast: a peer without its sockets cannot do anything useful.
+            System.err.println("Erreur lors de la création des sockets: " + e.getMessage());
+            System.exit(1);
+        }
     }
 }

@@ -28,9 +28,11 @@ public class PeerInfo {
         return port == peerInfo.port && Objects.equals(name, peerInfo.name);
     }
 
+    // A peer is identified by its name and TCP port: equals and hashCode
+    // must use the same fields, or HashSet/HashMap lookups silently fail.
     @Override
     public int hashCode() {
-        return Objects.hash(ip, port);
+        return Objects.hash(name, port);
     }
 
     public String getIp() {
