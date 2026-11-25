@@ -1,22 +1,23 @@
-version: '3'
 services:
   peer1:
     build: .
+    stdin_open: true   # keeps the menu usable: docker attach p2p-peer1-1
+    tty: true
     ports:
-      - "5001:5001"  # Port pour la communication TCP
-      - "8002:8002"  # Port pour la communication UDP (découverte)
+      - "8081:8080"      # REST API: http://localhost:8081/api/peers/list
     environment:
       - PEER_NAME=peer1
-      - PEER_PORT=5001
-      - UDP_PORT=8002
+      - PEER_PORT=5001   # TCP: chat
+      - UDP_PORT=8002    # UDP: direct discovery replies
     networks:
       - p2p_network
 
   peer2:
     build: .
+    stdin_open: true
+    tty: true
     ports:
-      - "5002:5002"  # Port pour la communication TCP
-      - "8003:8003"  # Port pour la communication UDP (découverte)
+      - "8082:8080"
     environment:
       - PEER_NAME=peer2
       - PEER_PORT=5002
@@ -24,6 +25,8 @@ services:
     networks:
       - p2p_network
 
+# Peers find each other by multicast, which only reaches containers on the
+# same network, so they talk over this network and need no published ports.
 networks:
   p2p_network:
     driver: bridge
