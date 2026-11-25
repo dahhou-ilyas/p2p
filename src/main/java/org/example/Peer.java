@@ -46,16 +46,25 @@ public class Peer {
     }
 
 
-    public void startPeer(){
+    public void start() {
         startBackground(this::listenForConnections);
         startBackground(this::startDiscoveryService);
         startBackground(this::multicastReceiver);
         startBackground(this::heartbeat);
 
         broadcastPresence();
-
-        Scanner scanner = new Scanner(System.in);
         System.out.println("Peer " + name + " démarré sur le port " + port + "   my UDP Port "+ discoveryUDPport);
+    }
+
+    /**
+     * The interactive menu. It is the only code that reads System.in: two
+     * Scanners on the same stream steal each other's input.
+     *
+     * @return true if the user chose to quit, false if there is no console
+     *         (stdin closed, e.g. a container started without -i)
+     */
+    public boolean runConsole() {
+        Scanner scanner = new Scanner(System.in);
 
         while (true){
             System.out.println("\nOptions:");
@@ -63,23 +72,25 @@ public class Peer {
             System.out.println("2. Envoyer un message à un pair");
             System.out.println("3. Quitter");
 
-            int choice = scanner.nextInt();
-            scanner.nextLine();
-
-            switch (choice){
-                case 1:
+            if (!scanner.hasNextLine()) {
+                return false;
+            }
+            switch (scanner.nextLine().trim()){
+                case "1":
                     showConnectedPeers();
                     break;
-                case 2:
+                case "2":
                     if (connectedPeers.isEmpty()) {
                         System.out.println("Aucun pair connecté.");
                         break;
                     }
                     selectAndConnectToPeer(scanner);
                     break;
-                case 3:
+                case "3":
                     stop();
-                    return;
+                    return true;
+                default:
+                    System.out.println("Choix invalide.");
             }
         }
     }
@@ -231,13 +242,18 @@ public class Peer {
     private void selectAndConnectToPeer(Scanner scanner) {
         showConnectedPeers();
         System.out.print("Sélectionnez le numéro du pair: ");
-        int selection = scanner.nextInt();
-        scanner.nextLine();
+        int selection;
+        try {
+            selection = Integer.parseInt(scanner.nextLine().trim());
+        } catch (NumberFormatException | java.util.NoSuchElementException e) {
+            System.out.println("Sélection invalide.");
+            return;
+        }
 
         PeerInfo[] peers = connectedPeers.keySet().toArray(new PeerInfo[0]);
         if (selection > 0 && selection <= peers.length) {
             PeerInfo selectedPeer = peers[selection - 1];
-            connectToPeer(selectedPeer.ip, selectedPeer.port);
+            connectToPeer(selectedPeer.ip, selectedPeer.port, scanner);
         } else {
             System.out.println("Sélection invalide.");
         }
@@ -256,59 +272,47 @@ public class Peer {
         }
     }
 
+    // Incoming chat: print what the other peer writes. This thread never
+    // touches the console; to answer, the user opens a connection back with
+    // option 2 of the menu.
     private void handleConnection(Socket socket) {
-        try {
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+        String from = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+        try (socket;
+             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
 
             out.println("Connecté au pair: " + name);
 
-            Scanner scanner = new Scanner(System.in);
             String inputLine;
-
             while ((inputLine = in.readLine()) != null) {
-                System.out.println("Message reçu: " + inputLine);
-                System.out.print("Répondre (ou 'quit' pour quitter): ");
-                String response = scanner.nextLine();
-
-                if ("quit".equalsIgnoreCase(response)) {
-                    break;
-                }
-                out.println(response);
+                System.out.println("\nMessage reçu de " + from + ": " + inputLine);
             }
-
-            socket.close();
+            System.out.println("\nConversation terminée avec " + from);
         } catch (IOException e) {
             System.err.println("Erreur lors de la gestion de la connexion: " + e.getMessage());
         }
     }
 
-    private void connectToPeer(String ip, int peerPort) {
-        try {
-            Socket socket = new Socket(ip, peerPort);
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+    // Outgoing chat, driven by the menu thread with the menu's Scanner.
+    private void connectToPeer(String ip, int peerPort, Scanner scanner) {
+        try (Socket socket = new Socket(ip, peerPort);
+             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
 
             String welcome = in.readLine();
             System.out.println(welcome);
 
-            Scanner scanner = new Scanner(System.in);
-            String userInput;
-
             while (true) {
                 System.out.print("Entrez votre message (ou 'quit' pour quitter): ");
-                userInput = scanner.nextLine();
-
+                if (!scanner.hasNextLine()) {
+                    break;
+                }
+                String userInput = scanner.nextLine();
                 if ("quit".equalsIgnoreCase(userInput)) {
                     break;
                 }
-
                 out.println(userInput);
-                String response = in.readLine();
-                System.out.println("Réponse reçue: " + response);
             }
-
-            socket.close();
         } catch (IOException e) {
             System.err.println("Erreur lors de la connexion au pair: " + e.getMessage());
         }

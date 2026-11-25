@@ -23,7 +23,13 @@ public class Main {
 
         try {
             Peer peer = new Peer(name, tcpPort, udpPort);
-            peer.startPeer();
+            peer.start();
+            if (!peer.runConsole()) {
+                // No console (stdin closed): keep running as a discovery-only peer.
+                Thread.currentThread().join();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         } catch (java.io.IOException e) {
             // Fail fast: a peer without its sockets cannot do anything useful.
             System.err.println("Erreur lors de la création des sockets: " + e.getMessage());
